@@ -9,99 +9,65 @@ using System.Collections.Generic;
 using System.Data;
 using System.Collections.Specialized;
 using System.Runtime.Serialization.Formatters.Binary;
+
 public class SSMSPwd
 {
+    const string CANT_FIND_ASSEMBLIES = "Can't find assemblies path. Use -p to set.";
+
     static bool _all = false;
     static bool _issem = false;
     static int _ver = 0;
-    static string asmdir = null;
-    static string datpath = null;
+    static string _asmdir = null;
+    static string _datpath = null;
     static void help()
     {
-        Console.WriteLine(@"usage: ssmspwd [-f file] [-p path] [-all]
-       -f: decrypt from specified file
-       -p: path of SSMS installation
-       -a: dump all saved info(only dump password information default)");
+        var helpLines = new[]
+        {
+            "usage: ssmspwd [-f file] [-p path] [-all]",
+            "-f: decrypt from specified file",
+            "-p: path of SSMS installation",
+            "-a: dump all saved info (only dump password information default)"
+        };
+
+        Console.WriteLine(string.Join(Environment.NewLine, helpLines));
+
         Environment.Exit(-1);
     }
     public static void Main(string[] args)
     {
         Console.WriteLine("SQL Server Management Studio(SSMS) saved password dumper.");
         Console.WriteLine("Part of GMH's fuck Tools, Code By zcgonvh.\r\n");
+
         AppDomain.CurrentDomain.AssemblyResolve += new ResolveEventHandler(LoadDepends);
+
         try
         {
             for (int i = 0; i < args.Length; i++)
             {
                 if (stricmp(args[i], "-a")) { _all = true; }
-                else if (stricmp(args[i], "-f")) { i++; datpath = args[i]; }
-                else if (stricmp(args[i], "-p")) { i++; asmdir = args[i] + "\\"; }
+                else if (stricmp(args[i], "-f")) { i++; _datpath = args[i]; }
+                else if (stricmp(args[i], "-p")) { i++; _asmdir = args[i] + "\\"; }
                 else { help(); }
             }
         }
         catch { help(); }
         try
         {
-            if (asmdir == null)
+            if (_asmdir == null)
             {
-                RegistryKey rk = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Microsoft SQL Server\");
-                if (rk == null) { Console.WriteLine("can not get assemblies path,use -p to set"); return; }
-                foreach (string s in rk.GetSubKeyNames())
-                {
-                    int i = 0;
-                    if (int.TryParse(s, out i))
-                    {
-                        string dir = Registry.GetValue(@"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Microsoft SQL Server\" + i + @"\Tools\ShellSEM", "InstallDir", null) as string;
-                        if (dir != null) { _issem = true; }
-                        if (dir == null) { dir = Registry.GetValue(@"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Microsoft SQL Server\" + i + @"\Tools\Shell", "InstallDir", null) as string; }
-                        if (dir == null) { dir = Registry.GetValue(@"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Microsoft SQL Server\" + i + @"\Tools\ClientSetup", "SqlToolsPath", null) as string; }
-                        if (dir == null) { dir = Registry.GetValue(@"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Microsoft SQL Server\" + i + @"\Tools\Setup", "SqlPath", null) as string; if (dir != null) { dir += "Binn\\ManagementStudio\\"; } }
-                        if (dir != null) { _ver = i; asmdir = dir; break; }
-                    }
-                }
-                if ((asmdir == null)) { Console.WriteLine("can not get assemblies path,use -p to set"); return; }
-                if (!new DirectoryInfo(asmdir).Exists)
-                {
-                    asmdir = asmdir.Replace(@"\Program Files\", @"\Program Files (x86)\");
-                }
-                if (!new DirectoryInfo(asmdir).Exists) { Console.WriteLine("can not get assemblies path,use -p to set"); return; }
+                _asmdir = GetAsmdir();
             }
-            if (datpath == null)
+            if (_datpath == null)
             {
-                string appdata = Environment.GetEnvironmentVariable("appdata") + "\\";
-                switch (_ver)
-                {
-                    case 0:
-                        {
-                            Console.WriteLine("can not get version ,please use -f to set filepath", _ver);
-                            return;
-                        }
-                    case 90://SSMS 2005
-                        {
-                            if (_issem) { datpath = appdata + @"Microsoft\Microsoft SQL Server\90\Tools\ShellSEM\mru.dat"; }
-                            else { datpath = appdata + @"Microsoft\Microsoft SQL Server\90\Tools\Shell\mru.dat"; }
-                            break;
-                        }
-                    case 100://SSMS 2008
-                        {
-                            datpath = appdata + @"Microsoft\Microsoft SQL Server\100\Tools\Shell\SqlStudio.bin";
-                            break;
-                        }
-                    default://Others
-                        {
-                            datpath = appdata + @"Microsoft\SQL Server Management Studio\" + (_ver / 10).ToString("#.0#") + @"\SqlStudio.bin";
-                            break;
-                        }
-                }
-                if (!new FileInfo(datpath).Exists)
-                {
-                    Console.WriteLine(datpath);
-                    Console.WriteLine("unknown ver {0} ,please use -f to set filepath", _ver);
-                    return;
-                }
+                _datpath = GetDatpath();
             }
 
-            object o = DeserializeFile(datpath);
+            if (_asmdir == null || _datpath == null)
+            {
+                return;
+            }
+
+            object o = DeserializeFile(_datpath);
             List<info> infos = null;
             if (_ver == 90) { infos = DecodeStudio90(o); }
             else { infos = DecodeStudioHigh(o); }
@@ -109,6 +75,107 @@ public class SSMSPwd
         }
         catch (Exception ex) { Console.WriteLine("some thing error:{0}\r\n{1}\r\n", ex.Message, ex); }
     }
+
+    static string GetAsmdir()
+    {
+        string asmdir = null;
+
+        RegistryKey rk = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Microsoft SQL Server\");
+
+        if (rk == null)
+        {
+            Console.WriteLine(CANT_FIND_ASSEMBLIES);
+            return null;
+        }
+
+        string[] subkeynames = rk.GetSubKeyNames();
+
+        foreach (string s in subkeynames)
+        {
+            int i = 0;
+
+            if (int.TryParse(s, out i))
+            {
+                string dir = Registry.GetValue(@"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Microsoft SQL Server\" + i + @"\Tools\ShellSEM", "InstallDir", null) as string;
+                if (dir != null)
+                {
+                    _issem = true;
+                }
+                if (dir == null)
+                {
+                    dir = Registry.GetValue(@"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Microsoft SQL Server\" + i + @"\Tools\Shell", "InstallDir", null) as string;
+                }
+                if (dir == null)
+                {
+                    dir = Registry.GetValue(@"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Microsoft SQL Server\" + i + @"\Tools\ClientSetup", "SqlToolsPath", null) as string;
+                }
+                if (dir == null)
+                {
+                    dir = Registry.GetValue(@"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Microsoft SQL Server\" + i + @"\Tools\Setup", "SqlPath", null) as string; if (dir != null) { dir += "Binn\\ManagementStudio\\"; }
+                }
+                if (dir != null)
+                {
+                    _ver = i; asmdir = dir; break;
+                }
+            }
+        }
+        if (asmdir == null)
+        {
+            Console.WriteLine(CANT_FIND_ASSEMBLIES);
+            return null;
+        }
+        if (!new DirectoryInfo(asmdir).Exists)
+        {
+            asmdir = asmdir.Replace(@"\Program Files\", @"\Program Files (x86)\");
+        }
+        if (!new DirectoryInfo(asmdir).Exists)
+        {
+            Console.WriteLine(CANT_FIND_ASSEMBLIES);
+            return null;
+        }
+
+        return asmdir;
+    }
+
+    static string GetDatpath()
+    {
+        string datpath = null;
+        string appdata = Environment.GetEnvironmentVariable("appdata") + "\\";
+
+        switch (_ver)
+        {
+            case 0:
+                {
+                    Console.WriteLine("Can't determine version. Please use -f to set filepath.", _ver);
+                    return null;
+                }
+            case 90://SSMS 2005
+                {
+                    if (_issem) { datpath = appdata + @"Microsoft\Microsoft SQL Server\90\Tools\ShellSEM\mru.dat"; }
+                    else { datpath = appdata + @"Microsoft\Microsoft SQL Server\90\Tools\Shell\mru.dat"; }
+                    break;
+                }
+            case 100://SSMS 2008
+                {
+                    datpath = appdata + @"Microsoft\Microsoft SQL Server\100\Tools\Shell\SqlStudio.bin";
+                    break;
+                }
+            default://Others
+                {
+                    datpath = appdata + @"Microsoft\SQL Server Management Studio\" + (_ver / 10).ToString("#.0#") + @"\SqlStudio.bin";
+                    break;
+                }
+        }
+        if (!new FileInfo(datpath).Exists)
+        {
+            Console.WriteLine(datpath);
+            Console.WriteLine("Unknown ver {0}. Please use -f to set filepath", _ver);
+            return null;
+        }
+
+        return datpath;
+    }
+
     static object GetObjectPrivateDicvalue(Type t, object obj, string key)
     {
         IDictionary dic = GetObjectPrivateDic(t, obj);
@@ -239,11 +306,22 @@ public class SSMSPwd
         AssemblyName asn = new AssemblyName(args.Name);
         try
         {
-            string dllpath = asmdir + asn.Name + ".dll";
+            string dllpath = _asmdir + asn.Name + ".dll";
             Assembly asm = Assembly.LoadFile(dllpath);
             return asm;
         }
-        catch (Exception ex) { if (asn.Name == "System") { Console.WriteLine("please re-compile this program with .net 4.0 ."); } else { Console.WriteLine(ex); } Environment.Exit(-1); }
+        catch (Exception ex)
+        {
+            if (asn.Name == "System")
+            {
+                Console.WriteLine("please re-compile this program with .net 4.0 .");
+            }
+            else
+            {
+                Console.WriteLine(ex);
+            }
+            Environment.Exit(-1);
+        }
         return null;
     }
     static object DeserializeFile(string path)
