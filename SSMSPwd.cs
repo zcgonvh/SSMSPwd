@@ -27,8 +27,9 @@ public class SSMSPwd
             "usage: ssmspwd [-f file] [-p path] [-all]",
             "-f: decrypt from specified file",
             "-p: path of SSMS installation",
+            "-v: SSMS version (90, 110, 140, etc.)",
             "-a: dump all saved info (only dump password information default)",
-            "-v: verbose mode"
+            "-verbose: verbose mode"
         };
 
         Console.WriteLine(string.Join(Environment.NewLine, helpLines));
@@ -51,7 +52,8 @@ public class SSMSPwd
                 if (stricmp(arg, "-a")) { _all = true; }
                 else if (stricmp(arg, "-f")) { i++; _datpath = args[i]; }
                 else if (stricmp(arg, "-p")) { i++; _asmdir = args[i] + "\\"; }
-                else if (stricmp(arg, "-v")) { _verbose = true; }
+                else if (stricmp(arg, "-v")) { i++; _ver = int.Parse(args[i]); }
+                else if (stricmp(arg, "-verbose")) { _verbose = true; }
                 else { help(); }
             }
         }
@@ -74,16 +76,25 @@ public class SSMSPwd
 
             object o = DeserializeFile(_datpath);
             List<info> infos = null;
-            if (_ver == 90) { infos = DecodeStudio90(o); }
-            else { infos = DecodeStudioHigh(o); }
+            if (_ver == 90)
+            {
+                infos = DecodeStudio90(o);
+            }
+            else
+            {
+                infos = DecodeStudioHigh(o);
+            }
             dumpinfo(infos);
         }
-        catch (Exception ex) { Console.WriteLine("some thing error:{0}\r\n{1}\r\n", ex.Message, ex); }
+        catch (Exception ex) { Console.WriteLine("Error:{0}\r\n{1}\r\n", ex.Message, ex); }
     }
 
-    static string GetAsmdir()
+    static string[] GetVersionsToCheck()
     {
-        string asmdir = null;
+        if (_ver != 0)
+        {
+            return new[] { _ver.ToString() };
+        }
 
         RegistryKey rk = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Microsoft SQL Server\");
 
@@ -95,14 +106,17 @@ public class SSMSPwd
                 Console.WriteLine("Microsoft SQL Server registry key not found.");
             }
 
-            return null;
+            return new string[0];
         }
 
-        string[] subkeynames = rk.GetSubKeyNames();
+        return rk.GetSubKeyNames();
+    }
 
+    static string GetAsmdir()
+    {
+        string asmdir = null;
 
-
-        foreach (string s in subkeynames)
+        foreach (string s in GetVersionsToCheck())
         {
             int i = 0;
 
@@ -114,7 +128,7 @@ public class SSMSPwd
                 }
 
                 string dir = Registry.GetValue($@"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Microsoft SQL Server\{i}\Tools\ShellSEM", "InstallDir", null) as string;
-                
+
                 if (dir != null)
                 {
                     _issem = true;
@@ -145,6 +159,7 @@ public class SSMSPwd
         if (asmdir == null)
         {
             Console.WriteLine(CANT_FIND_ASSEMBLIES);
+
             if (_verbose)
             {
                 Console.WriteLine("SQL Tools directory not found in registry.");
@@ -152,16 +167,17 @@ public class SSMSPwd
 
             return null;
         }
+
         if (_verbose)
         {
             Console.WriteLine($"Determined assembly directory: {asmdir}");
         }
 
-
         if (!new DirectoryInfo(asmdir).Exists)
         {
             asmdir = asmdir.Replace(@"\Program Files\", @"\Program Files (x86)\");
         }
+
         if (!new DirectoryInfo(asmdir).Exists)
         {
             Console.WriteLine(CANT_FIND_ASSEMBLIES);
@@ -176,12 +192,11 @@ public class SSMSPwd
         return asmdir;
     }
 
-    static string GetDatpath()
+    static string GetDatPathForVersion(int version)
     {
-        string datpath = null;
         string appdata = Environment.GetEnvironmentVariable("appdata") + "\\";
 
-        switch (_ver)
+        switch (version)
         {
             case 0:
                 {
@@ -190,25 +205,39 @@ public class SSMSPwd
                 }
             case 90://SSMS 2005
                 {
-                    if (_issem) { datpath = appdata + @"Microsoft\Microsoft SQL Server\90\Tools\ShellSEM\mru.dat"; }
-                    else { datpath = appdata + @"Microsoft\Microsoft SQL Server\90\Tools\Shell\mru.dat"; }
-                    break;
+                    if (_issem)
+                    {
+                        return appdata + @"Microsoft\Microsoft SQL Server\90\Tools\ShellSEM\mru.dat";
+                    }
+                    else
+                    {
+                        return appdata + @"Microsoft\Microsoft SQL Server\90\Tools\Shell\mru.dat";
+                    }
                 }
             case 100://SSMS 2008
                 {
-                    datpath = appdata + @"Microsoft\Microsoft SQL Server\100\Tools\Shell\SqlStudio.bin";
-                    break;
+                    return appdata + @"Microsoft\Microsoft SQL Server\100\Tools\Shell\SqlStudio.bin";
                 }
             default://Others
                 {
-                    datpath = appdata + @"Microsoft\SQL Server Management Studio\" + (_ver / 10).ToString("#.0#") + @"\SqlStudio.bin";
-                    break;
+                    return appdata + @"Microsoft\SQL Server Management Studio\" + (_ver / 10).ToString("#.0#") + @"\SqlStudio.bin";
                 }
         }
+    }
+
+    static string GetDatpath()
+    {
+        var datpath = GetDatPathForVersion(_ver);
+
+        if (datpath == null)
+        {
+            return null;
+        }
+
         if (!new FileInfo(datpath).Exists)
         {
             Console.WriteLine(datpath);
-            Console.WriteLine("Unknown ver {0}. Please use -f to set filepath", _ver);
+            Console.WriteLine("Unknown ver {0} or incorrectly determined version. Please use -f to set filepath or -v to specify version", _ver);
             return null;
         }
 
@@ -323,7 +352,9 @@ public class SSMSPwd
         foreach (info inf in infos)
         {
             if (_all || inf.pass != null)
+            {
                 Console.WriteLine("server: {0}\r\nUser: {1}\r\nType: {2}\r\nPassword: {3}\r\n", getnotnullstr(inf.server), getnotnullstr(inf.user), getnotnullstr(getauthtype(inf.type)), getnotnullstr(inf.pass));
+            }
         }
     }
     static string getnotnullstr(string s)
@@ -340,12 +371,19 @@ public class SSMSPwd
         }
         catch (Exception ex) { return "(decrypt data err: " + ex.Message.Replace("\r\n", "") + ")\r\n"; }
     }
+
     static Assembly LoadDepends(object sender, ResolveEventArgs args)
     {
         AssemblyName asn = new AssemblyName(args.Name);
         try
         {
             string dllpath = _asmdir + asn.Name + ".dll";
+
+            if (_verbose)
+            {
+                Console.WriteLine($"Loading assembly {dllpath}");
+            }
+
             Assembly asm = Assembly.LoadFile(dllpath);
             return asm;
         }
