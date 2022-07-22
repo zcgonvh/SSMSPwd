@@ -19,6 +19,7 @@ public class SSMSPwd
     static int _ver = 0;
     static string _asmdir = null;
     static string _datpath = null;
+    static bool _verbose = false;
     static void help()
     {
         var helpLines = new[]
@@ -26,7 +27,8 @@ public class SSMSPwd
             "usage: ssmspwd [-f file] [-p path] [-all]",
             "-f: decrypt from specified file",
             "-p: path of SSMS installation",
-            "-a: dump all saved info (only dump password information default)"
+            "-a: dump all saved info (only dump password information default)",
+            "-v: verbose mode"
         };
 
         Console.WriteLine(string.Join(Environment.NewLine, helpLines));
@@ -44,9 +46,12 @@ public class SSMSPwd
         {
             for (int i = 0; i < args.Length; i++)
             {
-                if (stricmp(args[i], "-a")) { _all = true; }
-                else if (stricmp(args[i], "-f")) { i++; _datpath = args[i]; }
-                else if (stricmp(args[i], "-p")) { i++; _asmdir = args[i] + "\\"; }
+                var arg = args[i];
+
+                if (stricmp(arg, "-a")) { _all = true; }
+                else if (stricmp(arg, "-f")) { i++; _datpath = args[i]; }
+                else if (stricmp(arg, "-p")) { i++; _asmdir = args[i] + "\\"; }
+                else if (stricmp(arg, "-v")) { _verbose = true; }
                 else { help(); }
             }
         }
@@ -85,10 +90,17 @@ public class SSMSPwd
         if (rk == null)
         {
             Console.WriteLine(CANT_FIND_ASSEMBLIES);
+            if (_verbose)
+            {
+                Console.WriteLine("Microsoft SQL Server registry key not found.");
+            }
+
             return null;
         }
 
         string[] subkeynames = rk.GetSubKeyNames();
+
+
 
         foreach (string s in subkeynames)
         {
@@ -96,22 +108,32 @@ public class SSMSPwd
 
             if (int.TryParse(s, out i))
             {
-                string dir = Registry.GetValue(@"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Microsoft SQL Server\" + i + @"\Tools\ShellSEM", "InstallDir", null) as string;
+                if (_verbose)
+                {
+                    Console.WriteLine($"Checking version {i}");
+                }
+
+                string dir = Registry.GetValue($@"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Microsoft SQL Server\{i}\Tools\ShellSEM", "InstallDir", null) as string;
+                
                 if (dir != null)
                 {
                     _issem = true;
                 }
                 if (dir == null)
                 {
-                    dir = Registry.GetValue(@"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Microsoft SQL Server\" + i + @"\Tools\Shell", "InstallDir", null) as string;
+                    dir = Registry.GetValue($@"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Microsoft SQL Server\{i}\Tools\Shell", "InstallDir", null) as string;
                 }
                 if (dir == null)
                 {
-                    dir = Registry.GetValue(@"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Microsoft SQL Server\" + i + @"\Tools\ClientSetup", "SqlToolsPath", null) as string;
+                    dir = Registry.GetValue($@"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Microsoft SQL Server\{i}\Tools\ClientSetup", "SqlToolsPath", null) as string;
                 }
                 if (dir == null)
                 {
-                    dir = Registry.GetValue(@"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Microsoft SQL Server\" + i + @"\Tools\Setup", "SqlPath", null) as string; if (dir != null) { dir += "Binn\\ManagementStudio\\"; }
+                    dir = Registry.GetValue($@"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Microsoft SQL Server\{i}\Tools\Setup", "SqlPath", null) as string;
+                    if (dir != null)
+                    {
+                        dir += "Binn\\ManagementStudio\\";
+                    }
                 }
                 if (dir != null)
                 {
@@ -119,11 +141,23 @@ public class SSMSPwd
                 }
             }
         }
+
         if (asmdir == null)
         {
             Console.WriteLine(CANT_FIND_ASSEMBLIES);
+            if (_verbose)
+            {
+                Console.WriteLine("SQL Tools directory not found in registry.");
+            }
+
             return null;
         }
+        if (_verbose)
+        {
+            Console.WriteLine($"Determined assembly directory: {asmdir}");
+        }
+
+
         if (!new DirectoryInfo(asmdir).Exists)
         {
             asmdir = asmdir.Replace(@"\Program Files\", @"\Program Files (x86)\");
@@ -131,6 +165,11 @@ public class SSMSPwd
         if (!new DirectoryInfo(asmdir).Exists)
         {
             Console.WriteLine(CANT_FIND_ASSEMBLIES);
+            if (_verbose)
+            {
+                Console.WriteLine("SQL Tools directory found in registry but couldn't be located on disk.");
+            }
+
             return null;
         }
 
